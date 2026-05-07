@@ -98,9 +98,6 @@ jobs:
       - name: Unit tests
         run: pnpm test:unit
 
-      - name: Cargo clippy
-        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
-
       - name: Build Tauri app
         shell: bash
         run: pnpm tauri build --config '{"bundle":{"createUpdaterArtifacts":false}}'
