@@ -2,11 +2,14 @@
 //!
 //! Handles provider CRUD operations, switching, and configuration management.
 
+mod codex_layers;
 mod endpoints;
 mod gemini_auth;
 mod live;
 mod pi;
 mod usage;
+
+pub use codex_layers::CodexFinalConfigSaveResult;
 
 use indexmap::IndexMap;
 use regex::Regex;
@@ -5097,6 +5100,9 @@ impl ProviderService {
         Self::normalize_provider_if_claude(&app_type, &mut provider);
         Self::validate_provider_settings(&app_type, &provider)?;
         normalize_provider_common_config_for_storage(state.db.as_ref(), &app_type, &mut provider)?;
+        if matches!(app_type, AppType::Codex) {
+            Self::prepare_codex_layers_for_add(state.db.as_ref(), &mut provider)?;
+        }
         Self::normalize_usage_script_credential_overrides(&app_type, &mut provider);
         if app_type.is_additive_mode() {
             Self::set_provider_live_config_managed(&mut provider, add_to_live);
@@ -5210,6 +5216,18 @@ impl ProviderService {
         original_id: Option<&str>,
         provider: Provider,
     ) -> Result<bool, AppError> {
+        Self::update_with_options(state, app_type, original_id, provider, true)
+    }
+
+    /// `preserve_codex_config`：为 true 时，已分层的 Codex 供应商沿用数据库中的
+    /// 最终配置与分层内容（编辑表单只保存元数据/认证）；Codex 配置标签页保存时为 false。
+    pub(crate) fn update_with_options(
+        state: &AppState,
+        app_type: AppType,
+        original_id: Option<&str>,
+        provider: Provider,
+        preserve_codex_config: bool,
+    ) -> Result<bool, AppError> {
         if app_type == AppType::Pi {
             return pi::update(state, original_id, provider);
         }
@@ -5237,6 +5255,22 @@ impl ProviderService {
         Self::normalize_provider_if_claude(&app_type, &mut provider);
         Self::validate_provider_settings(&app_type, &provider)?;
         normalize_provider_common_config_for_storage(state.db.as_ref(), &app_type, &mut provider)?;
+        if matches!(app_type, AppType::Codex) {
+            let live_final_config = if preserve_codex_config {
+                existing_provider
+                    .as_ref()
+                    .and_then(|existing| Self::codex_live_final_config_for_update(state, existing))
+            } else {
+                None
+            };
+            Self::reconcile_codex_layers_for_update(
+                state.db.as_ref(),
+                existing_provider.as_ref(),
+                &mut provider,
+                preserve_codex_config,
+                live_final_config,
+            )?;
+        }
         if matches!(app_type, AppType::Codex) && provider.category.as_deref() == Some("official") {
             crate::codex_config::strip_codex_unified_session_bucket_from_settings(
                 &mut provider.settings_config,
@@ -6128,6 +6162,11 @@ impl ProviderService {
         let providers = state.db.get_all_providers(app_type.as_str())?;
 
         for provider in providers.values() {
+            // 双层 Codex 供应商保存的是最终配置，不能再剥离通用配置。
+            if live::codex_provider_has_config_layers(&app_type, provider) {
+                continue;
+            }
+
             if provider
                 .meta
                 .as_ref()
@@ -6203,7 +6242,7 @@ impl ProviderService {
     /// 读到的 live 一定是"片段 + 本地改动"的超集，重提取只会丢掉用户真正删掉的键，
     /// 不会误删其它供应商共享的内容。
     ///
-    /// **作用域**：Claude + Codex。Codex 提取器（`extract_codex_common_config`）
+    /// **作用域**：Claude。Codex 改为双层配置后，共享通用配置只能显式保存。Codex 提取器（`extract_codex_common_config`）
     /// 已剥离全部供应商专属与 cc-switch 注入内容：`model` / `model_provider` /
     /// 顶层 `base_url` / 整张 `model_providers` 表（含端点与统一会话桶）、
     /// `mcp_servers`（SSOT 在 DB 表）、顶层 `experimental_bearer_token`
@@ -6220,8 +6259,9 @@ impl ProviderService {
         live_config: &Value,
         result: &mut SwitchResult,
     ) {
-        // 作用域限定 Claude + Codex（见函数文档）。
-        if !matches!(app_type, AppType::Claude | AppType::Codex) {
+        // 作用域限定 Claude（见函数文档）。Codex 的共享通用配置只能在编辑页显式保存，
+        // 切换时不再从 live 自动回写。
+        if !matches!(app_type, AppType::Claude) {
             return;
         }
 

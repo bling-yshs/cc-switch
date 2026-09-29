@@ -171,12 +171,20 @@ export interface LocalProxyRequestOverrides {
   body?: Record<string, unknown>;
 }
 
+// Codex 双层配置快照（存在时 settingsConfig.config 为合并后的最终配置）
+export interface CodexConfigLayers {
+  providerConfig: string;
+  commonConfig: string;
+}
+
 // 供应商元数据（字段名与后端一致，保持 snake_case）
 export interface ProviderMeta {
   // 自定义端点：以 URL 为键，值为端点信息
   custom_endpoints?: Record<string, CustomEndpoint>;
   // 是否在切换/同步到 live 时应用通用配置片段
   commonConfigEnabled?: boolean;
+  // Codex 双层配置：服务商配置 + 最近一次保存最终配置时采用的通用配置
+  codexConfigLayers?: CodexConfigLayers;
   // Claude Desktop 3P 配置写入模式
   claudeDesktopMode?: "direct" | "proxy";
   // Claude Desktop 本地路由模式：Claude-safe route -> upstream model

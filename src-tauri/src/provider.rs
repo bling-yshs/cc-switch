@@ -439,6 +439,21 @@ impl LocalProxyRequestOverrides {
     }
 }
 
+/// Codex 双层配置快照。
+///
+/// 存在该字段时，`settings_config.config` 保存的是合并后的最终 TOML，
+/// 写入 live 时不再动态叠加通用配置。
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexConfigLayers {
+    /// 服务商独立配置（TOML）
+    #[serde(default)]
+    pub provider_config: String,
+    /// 最近一次保存最终配置时采用的通用配置（TOML）
+    #[serde(default)]
+    pub common_config: String,
+}
+
 /// 供应商元数据
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ProviderMeta {
@@ -451,6 +466,9 @@ pub struct ProviderMeta {
         skip_serializing_if = "Option::is_none"
     )]
     pub common_config_enabled: Option<bool>,
+    /// Codex 双层配置（服务商配置 + 通用配置快照）
+    #[serde(rename = "codexConfigLayers", skip_serializing_if = "Option::is_none")]
+    pub codex_config_layers: Option<CodexConfigLayers>,
     /// Claude Desktop 3P 写入模式：direct（直连）或 proxy（预留）
     #[serde(rename = "claudeDesktopMode", skip_serializing_if = "Option::is_none")]
     pub claude_desktop_mode: Option<ClaudeDesktopMode>,

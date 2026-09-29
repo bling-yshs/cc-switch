@@ -102,7 +102,7 @@ import {
   useApiKeyLink,
   useTemplateValues,
   useCommonConfigSnippet,
-  useCodexCommonConfig,
+  useCodexLayeredConfig,
   useSpeedTestEndpoints,
   useCodexTomlValidation,
   useGeminiConfigState,
@@ -853,22 +853,41 @@ function ProviderFormFull({
     enabled: appId === "claude",
   });
 
-  const {
-    useCommonConfig: useCodexCommonConfigFlag,
-    commonConfigSnippet: codexCommonConfigSnippet,
-    commonConfigError: codexCommonConfigError,
-    handleCommonConfigToggle: handleCodexCommonConfigToggle,
-    handleCommonConfigSnippetChange: handleCodexCommonConfigSnippetChange,
-    isExtracting: isCodexExtracting,
-    handleExtract: handleCodexExtract,
-    clearCommonConfigError: clearCodexCommonConfigError,
-  } = useCodexCommonConfig({
-    codexConfig,
-    onConfigChange: handleCodexConfigChange,
-    initialData: appId === "codex" ? initialData : undefined,
-    initialEnabled:
-      appId === "codex" ? initialData?.meta?.commonConfigEnabled : undefined,
-    selectedPresetId: selectedPresetId ?? undefined,
+  // 服务商配置保存前的规范化：表单提交（新建）与“服务商配置”标签页保存共用
+  const normalizeCodexProviderConfig = useCallback(
+    (config: string) => {
+      let normalized =
+        category !== "official" && config.trim()
+          ? setCodexWireApi(config, "responses")
+          : config;
+      // 模型映射与「路由接管」解耦：对所有非官方供应商，填了就持久化。
+      // The default-model field writes the top-level `model` into the TOML
+      // as the user types; only when it was left empty fall back to the
+      // first catalog row so "fill mapping only" keeps its old behavior.
+      const catalogModels =
+        category !== "official"
+          ? normalizeCodexCatalogModelsForSave(codexCatalogModels)
+          : [];
+      if (catalogModels.length > 0 && !extractCodexModelName(normalized)) {
+        normalized = setCodexModelNameInConfig(
+          normalized,
+          catalogModels[0].model,
+        );
+      }
+      return normalized;
+    },
+    [category, codexCatalogModels],
+  );
+
+  const codexLayered = useCodexLayeredConfig({
+    enabled: appId === "codex",
+    providerId,
+    isEditMode,
+    isProxyTakeover,
+    initialMeta: appId === "codex" ? initialData?.meta : undefined,
+    providerDraft: codexConfig,
+    normalizeProviderConfig: normalizeCodexProviderConfig,
+    onProviderDraftChange: handleCodexConfigChange,
   });
 
   const {
@@ -1114,6 +1133,28 @@ function ProviderFormFull({
     (appId === "claude" || appId === "codex") && category !== "official";
 
   const handleSubmit = async (values: ProviderFormData) => {
+    // Codex 配置标签页各自保存；表单保存不会带走其中未保存的修改，避免静默丢失
+    if (appId === "codex") {
+      const unsavedTabs = [
+        codexLayered.isLiveDirty &&
+          t("codexConfig.layers.liveTab", { defaultValue: "当前配置" }),
+        isEditMode &&
+          codexLayered.isProviderDirty &&
+          t("codexConfig.layers.providerTab", { defaultValue: "服务商配置" }),
+        codexLayered.isCommonDirty &&
+          t("codexConfig.layers.commonTab", { defaultValue: "通用配置" }),
+      ].filter(Boolean);
+      if (unsavedTabs.length > 0) {
+        toast.error(
+          t("codexConfig.layers.unsavedTabsBlockSubmit", {
+            defaultValue: "请先保存或撤销以下配置标签页中的修改：{{tabs}}",
+            tabs: unsavedTabs.join("、"),
+          }),
+        );
+        return;
+      }
+    }
+
     const overridesResult = shouldApplyLocalProxyRequestOverrides
       ? buildLocalProxyRequestOverrides(
           localProxyHeadersOverride,
@@ -1508,11 +1549,9 @@ function ProviderFormFull({
         const authJson = shouldStripCodexOfficialAuth
           ? {}
           : JSON.parse(codexAuth);
-        const codexConfigForSave = codexConfig ?? "";
-        let normalizedCodexConfig =
-          category !== "official" && codexConfigForSave.trim()
-            ? setCodexWireApi(codexConfigForSave, "responses")
-            : codexConfigForSave;
+        const codexConfigForSave = normalizeCodexProviderConfig(
+          codexConfig ?? "",
+        );
         // 模型映射与「路由接管」解耦：对所有非官方供应商，填了就持久化
         //（Chat 生成兼容路由、原生 Responses 生成 model-catalogs.json），
         // 留空归一化为 [] 即不写。后端只看 modelCatalog.models 是否非空。
@@ -1520,21 +1559,10 @@ function ProviderFormFull({
           category !== "official"
             ? normalizeCodexCatalogModelsForSave(codexCatalogModels)
             : [];
-        // The default-model field writes the top-level `model` into the TOML
-        // as the user types; only when it was left empty fall back to the
-        // first catalog row so "fill mapping only" keeps its old behavior.
-        if (
-          normalizedCatalogModels.length > 0 &&
-          !extractCodexModelName(normalizedCodexConfig)
-        ) {
-          normalizedCodexConfig = setCodexModelNameInConfig(
-            normalizedCodexConfig,
-            normalizedCatalogModels[0].model,
-          );
-        }
+        // 分层供应商编辑时后端以已保存的最终配置为准；新建时以服务商配置合并通用配置
         const configObj = {
           auth: authJson,
-          config: normalizedCodexConfig,
+          config: codexConfigForSave,
         } as {
           auth: unknown;
           config: string;
@@ -1718,11 +1746,19 @@ function ProviderFormFull({
       commonConfigEnabled:
         appId === "claude"
           ? useCommonConfig
-          : appId === "codex"
-            ? useCodexCommonConfigFlag
-            : appId === "gemini"
-              ? useGeminiCommonConfigFlag
-              : undefined,
+          : appId === "gemini"
+            ? useGeminiCommonConfigFlag
+            : undefined,
+      // Codex 双层配置：编辑时后端沿用已保存的分层内容；新建时由后端补齐通用配置快照
+      codexConfigLayers:
+        appId === "codex"
+          ? isEditMode
+            ? baseMeta?.codexConfigLayers
+            : {
+                providerConfig: normalizeCodexProviderConfig(codexConfig ?? ""),
+                commonConfig: "",
+              }
+          : undefined,
       endpointAutoSelect,
       claudeDesktopMode: undefined,
       // 保存 providerType（用于识别 Copilot / Codex OAuth 等特殊供应商）
@@ -2642,18 +2678,9 @@ function ProviderFormFull({
                 isProxyTakeover={isProxyTakeover}
                 onAuthChange={setCodexAuth}
                 onConfigChange={handleCodexConfigChange}
-                useCommonConfig={useCodexCommonConfigFlag}
-                onCommonConfigToggle={handleCodexCommonConfigToggle}
-                commonConfigSnippet={codexCommonConfigSnippet}
-                onCommonConfigSnippetChange={
-                  handleCodexCommonConfigSnippetChange
-                }
-                onCommonConfigErrorClear={clearCodexCommonConfigError}
-                commonConfigError={codexCommonConfigError}
                 authError={codexAuthError}
                 configError={codexConfigError}
-                onExtract={handleCodexExtract}
-                isExtracting={isCodexExtracting}
+                layered={codexLayered}
               />
               {settingsConfigErrorField}
             </>

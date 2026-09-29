@@ -487,6 +487,59 @@ pub fn update_toml_common_config_snippet(
     Ok(target_doc.to_string())
 }
 
+/// 通用配置向服务商配置补齐缺失键：表递归合并，已存在的非表值保持服务商值
+/// （数组整体保留、类型冲突时服务商优先）。
+fn fill_missing_toml_table_like(target: &mut dyn TableLike, source: &dyn TableLike) {
+    for (key, source_item) in source.iter() {
+        match target.get_mut(key) {
+            Some(target_item) => {
+                if let (Some(target_table), Some(source_table)) =
+                    (target_item.as_table_like_mut(), source_item.as_table_like())
+                {
+                    fill_missing_toml_table_like(target_table, source_table);
+                }
+            }
+            None => {
+                target.insert(key, source_item.clone());
+            }
+        }
+    }
+}
+
+fn parse_codex_layer_toml(text: &str, label: &str) -> Result<DocumentMut, AppError> {
+    if text.trim().is_empty() {
+        return Ok(DocumentMut::new());
+    }
+    text.parse::<DocumentMut>()
+        .map_err(|e| AppError::Message(format!("{label} TOML 格式无效: {e}")))
+}
+
+/// 合并 Codex 双层配置：以通用配置为基础，服务商配置按键递归覆盖。
+/// 以服务商文档为骨架输出，保留服务商配置的注释与键序。
+pub(crate) fn merge_codex_config_layers(
+    common_config: &str,
+    provider_config: &str,
+) -> Result<String, AppError> {
+    let common_doc = parse_codex_layer_toml(common_config, "通用配置")?;
+    let mut provider_doc = parse_codex_layer_toml(provider_config, "服务商配置")?;
+    fill_missing_toml_table_like(provider_doc.as_table_mut(), common_doc.as_table());
+    Ok(provider_doc.to_string())
+}
+
+/// 校验单层 Codex TOML（空文本合法）。
+pub(crate) fn validate_codex_layer_toml(text: &str, label: &str) -> Result<(), AppError> {
+    parse_codex_layer_toml(text, label).map(|_| ())
+}
+
+/// Codex 供应商是否已使用双层配置（`settings_config.config` 为最终配置）。
+pub(crate) fn codex_provider_has_config_layers(app_type: &AppType, provider: &Provider) -> bool {
+    matches!(app_type, AppType::Codex)
+        && provider
+            .meta
+            .as_ref()
+            .is_some_and(|meta| meta.codex_config_layers.is_some())
+}
+
 fn settings_contain_common_config(app_type: &AppType, settings: &Value, snippet: &str) -> bool {
     let trimmed = snippet.trim();
     if trimmed.is_empty() {
@@ -543,6 +596,10 @@ pub(crate) fn provider_uses_common_config(
     provider: &Provider,
     snippet: Option<&str>,
 ) -> bool {
+    // 双层 Codex 供应商存的是最终配置，写入/回填时都不再叠加或剥离通用配置。
+    if codex_provider_has_config_layers(app_type, provider) {
+        return false;
+    }
     match provider
         .meta
         .as_ref()
@@ -1203,6 +1260,10 @@ pub(crate) fn normalize_provider_common_config_for_storage(
     app_type: &AppType,
     provider: &mut Provider,
 ) -> Result<(), AppError> {
+    if codex_provider_has_config_layers(app_type, provider) {
+        return Ok(());
+    }
+
     let uses_common_config = provider
         .meta
         .as_ref()
@@ -1695,6 +1756,11 @@ fn sync_current_provider_for_app_respecting_takeover(
 /// For additive mode apps (OpenCode), all providers are synced instead of just the current one.
 pub fn sync_current_to_live(state: &AppState) -> Result<(), AppError> {
     let mut failures = Vec::new();
+
+    // 导入/同步进来的旧格式 Codex 供应商先固定为双层配置，再按最终配置写入。
+    if let Err(error) = super::ProviderService::ensure_codex_config_layers(state) {
+        log::warn!("Codex 双层配置兼容转换失败: {error}");
+    }
 
     // Sync providers based on mode
     for app_type in AppType::all() {

@@ -99,12 +99,16 @@ interface CodexConfigSectionProps {
   onChange: (value: string) => void;
   providerName?: string;
   showRemoteCompaction?: boolean;
-  useCommonConfig: boolean;
-  onCommonConfigToggle: (checked: boolean) => void;
-  onEditCommonConfig: () => void;
+  useCommonConfig?: boolean;
+  onCommonConfigToggle?: (checked: boolean) => void;
+  onEditCommonConfig?: () => void;
   commonConfigError?: string;
   configError?: string;
   isProxyTakeover?: boolean;
+  /** 自定义标题；传 null 隐藏标题 */
+  label?: React.ReactNode;
+  /** 自定义底部提示 */
+  hint?: React.ReactNode;
 }
 
 /**
@@ -121,6 +125,8 @@ export const CodexConfigSection: React.FC<CodexConfigSectionProps> = ({
   commonConfigError,
   configError,
   isProxyTakeover = false,
+  label,
+  hint,
 }) => {
   const { t } = useTranslation();
   const [isDarkMode, setIsDarkMode] = useState(false);
@@ -247,12 +253,14 @@ export const CodexConfigSection: React.FC<CodexConfigSectionProps> = ({
   return (
     <div className="space-y-2">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <label
-          htmlFor="codexConfig"
-          className="block text-sm font-medium text-foreground"
-        >
-          {t("codexConfig.configToml")}
-        </label>
+        {label !== null && (
+          <label
+            htmlFor="codexConfig"
+            className="block text-sm font-medium text-foreground"
+          >
+            {label ?? t("codexConfig.configToml")}
+          </label>
+        )}
 
         <div className="flex flex-wrap items-center justify-end gap-x-4 gap-y-1">
           {showRemoteCompaction && (
@@ -270,27 +278,31 @@ export const CodexConfigSection: React.FC<CodexConfigSectionProps> = ({
             </label>
           )}
 
-          <label className="inline-flex cursor-pointer items-center gap-2 text-sm text-muted-foreground">
-            <input
-              type="checkbox"
-              checked={useCommonConfig}
-              onChange={(e) => onCommonConfigToggle(e.target.checked)}
-              className="w-4 h-4 text-blue-500 bg-white dark:bg-gray-800 border-border-default rounded focus:ring-blue-500 dark:focus:ring-blue-400 focus:ring-2"
-            />
-            {t("codexConfig.writeCommonConfig")}
-          </label>
+          {onCommonConfigToggle && (
+            <label className="inline-flex cursor-pointer items-center gap-2 text-sm text-muted-foreground">
+              <input
+                type="checkbox"
+                checked={!!useCommonConfig}
+                onChange={(e) => onCommonConfigToggle(e.target.checked)}
+                className="w-4 h-4 text-blue-500 bg-white dark:bg-gray-800 border-border-default rounded focus:ring-blue-500 dark:focus:ring-blue-400 focus:ring-2"
+              />
+              {t("codexConfig.writeCommonConfig")}
+            </label>
+          )}
         </div>
       </div>
 
-      <div className="flex items-center justify-end">
-        <button
-          type="button"
-          onClick={onEditCommonConfig}
-          className="text-xs text-blue-500 dark:text-blue-400 hover:underline"
-        >
-          {t("codexConfig.editCommonConfig")}
-        </button>
-      </div>
+      {onEditCommonConfig && (
+        <div className="flex items-center justify-end">
+          <button
+            type="button"
+            onClick={onEditCommonConfig}
+            className="text-xs text-blue-500 dark:text-blue-400 hover:underline"
+          >
+            {t("codexConfig.editCommonConfig")}
+          </button>
+        </div>
+      )}
 
       {commonConfigError && (
         <p className="text-xs text-red-500 dark:text-red-400 text-right">
@@ -339,11 +351,12 @@ export const CodexConfigSection: React.FC<CodexConfigSectionProps> = ({
 
       {!configError && (
         <p className="text-xs text-muted-foreground">
-          {t(
-            isProxyTakeover
-              ? "codexConfig.configTomlStorageHint"
-              : "codexConfig.configTomlHint",
-          )}
+          {hint ??
+            t(
+              isProxyTakeover
+                ? "codexConfig.configTomlStorageHint"
+                : "codexConfig.configTomlHint",
+            )}
         </p>
       )}
     </div>

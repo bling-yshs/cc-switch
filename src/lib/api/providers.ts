@@ -46,6 +46,38 @@ export interface ClaudeDesktopDefaultRoute {
   supports1m: boolean;
 }
 
+export interface CodexFinalConfigSaveResult {
+  isCurrent: boolean;
+  applied: boolean;
+  applyError?: string | null;
+}
+
+/** Codex 双层配置编辑（服务商配置 / 通用配置 / 最终配置 / 当前配置文件） */
+export const codexConfigApi = {
+  async preview(commonConfig: string, providerConfig: string): Promise<string> {
+    return await invoke("preview_codex_config", {
+      commonConfig,
+      providerConfig,
+    });
+  },
+
+  async saveProviderConfig(id: string, providerConfig: string): Promise<void> {
+    await invoke("save_codex_provider_config", { id, providerConfig });
+  },
+
+  async saveFinalConfig(id: string): Promise<CodexFinalConfigSaveResult> {
+    return await invoke("save_codex_final_config", { id });
+  },
+
+  async readLiveConfig(): Promise<string> {
+    return await invoke("read_codex_live_config");
+  },
+
+  async saveLiveConfig(id: string, configText: string): Promise<void> {
+    await invoke("save_codex_live_config", { id, configText });
+  },
+};
+
 export const providersApi = {
   async getAll(appId: AppId): Promise<Record<string, Provider>> {
     return await invoke("get_providers", { app: appId });

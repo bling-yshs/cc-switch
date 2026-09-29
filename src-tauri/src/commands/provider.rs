@@ -74,6 +74,74 @@ pub async fn update_provider(
     .map_err(|e| format!("供应商更新任务执行失败: {e}"))?
 }
 
+/// Codex 双层配置：只读合并预览
+#[tauri::command]
+pub fn preview_codex_config(
+    common_config: String,
+    provider_config: String,
+) -> Result<String, String> {
+    ProviderService::preview_codex_config(&common_config, &provider_config)
+        .map_err(|e| e.to_string())
+}
+
+/// Codex 双层配置：保存服务商配置层
+#[tauri::command]
+pub async fn save_codex_provider_config(
+    app_handle: tauri::AppHandle,
+    id: String,
+    provider_config: String,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app_handle
+            .try_state::<AppState>()
+            .ok_or_else(|| "应用状态不可用".to_string())?;
+        ProviderService::save_codex_provider_config(state.inner(), &id, &provider_config)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("保存服务商配置任务执行失败: {e}"))?
+}
+
+/// Codex 双层配置：保存最终配置（当前供应商同步写入配置文件）
+#[tauri::command]
+pub async fn save_codex_final_config(
+    app_handle: tauri::AppHandle,
+    id: String,
+) -> Result<crate::services::provider::CodexFinalConfigSaveResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app_handle
+            .try_state::<AppState>()
+            .ok_or_else(|| "应用状态不可用".to_string())?;
+        ProviderService::save_codex_final_config(state.inner(), &id).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("保存最终配置任务执行失败: {e}"))?
+}
+
+/// 读取真实的 Codex config.toml
+#[tauri::command]
+pub fn read_codex_live_config() -> Result<String, String> {
+    ProviderService::read_codex_live_config_text().map_err(|e| e.to_string())
+}
+
+/// 直接保存 Codex config.toml（仅当前供应商）
+#[tauri::command]
+pub async fn save_codex_live_config(
+    app_handle: tauri::AppHandle,
+    id: String,
+    config_text: String,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app_handle
+            .try_state::<AppState>()
+            .ok_or_else(|| "应用状态不可用".to_string())?;
+        ProviderService::save_codex_live_config_text(state.inner(), &id, &config_text)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("保存当前配置任务执行失败: {e}"))?
+}
+
 #[tauri::command]
 pub fn delete_provider(
     state: State<'_, AppState>,
@@ -195,6 +263,9 @@ fn import_default_config_internal(state: &AppState, app_type: AppType) -> Result
         }
 
         ProviderService::migrate_legacy_common_config_usage_if_needed(state, app_type.clone())?;
+        if matches!(app_type, AppType::Codex) {
+            ProviderService::ensure_codex_config_layers(state)?;
+        }
     }
 
     Ok(imported)

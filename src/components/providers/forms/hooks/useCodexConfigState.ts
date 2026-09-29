@@ -8,11 +8,12 @@ import {
   updateCodexExperimentalBearerToken,
 } from "@/utils/providerConfigUtils";
 import { normalizeTomlText } from "@/utils/textNormalization";
-import type { CodexCatalogModel } from "@/types";
+import type { CodexCatalogModel, ProviderMeta } from "@/types";
 
 interface UseCodexConfigStateProps {
   initialData?: {
     settingsConfig?: Record<string, unknown>;
+    meta?: ProviderMeta;
   };
 }
 
@@ -118,9 +119,11 @@ export function useCodexConfigState({ initialData }: UseCodexConfigStateProps) {
 
     const config = initialData.settingsConfig;
     if (typeof config === "object" && config !== null) {
-      // 设置 config.toml
-      const configStr =
-        typeof (config as any).config === "string"
+      // 设置 config.toml：分层供应商编辑的是服务商配置层，而非合并后的最终配置
+      const layers = initialData.meta?.codexConfigLayers;
+      const configStr = layers
+        ? layers.providerConfig
+        : typeof (config as any).config === "string"
           ? (config as any).config
           : "";
       setCodexConfigState(configStr);
