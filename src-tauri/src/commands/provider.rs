@@ -103,16 +103,36 @@ pub async fn save_codex_provider_config(
 }
 
 /// Codex 双层配置：保存最终配置（当前供应商同步写入配置文件）
+///
+/// # Arguments
+/// * `app_handle` - 应用状态句柄。
+/// * `id` - 服务商标识。
+/// * `expected_live_config` - 预览时读取的磁盘内容。
+/// * `expected_is_current` - 预览时的当前服务商身份。
+/// * `expected_final_config` - 用户查看的合并结果。
+///
+/// # Returns
+/// 保存及应用结果，基线变化时返回错误。
 #[tauri::command]
 pub async fn save_codex_final_config(
     app_handle: tauri::AppHandle,
     id: String,
+    expected_live_config: Option<String>,
+    expected_is_current: bool,
+    expected_final_config: String,
 ) -> Result<crate::services::provider::CodexFinalConfigSaveResult, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let state = app_handle
             .try_state::<AppState>()
             .ok_or_else(|| "应用状态不可用".to_string())?;
-        ProviderService::save_codex_final_config(state.inner(), &id).map_err(|e| e.to_string())
+        ProviderService::save_codex_final_config(
+            state.inner(),
+            &id,
+            expected_live_config.as_deref(),
+            expected_is_current,
+            &expected_final_config,
+        )
+        .map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| format!("保存最终配置任务执行失败: {e}"))?
@@ -125,18 +145,33 @@ pub fn read_codex_live_config() -> Result<String, String> {
 }
 
 /// 直接保存 Codex config.toml（仅当前供应商）
+///
+/// # Arguments
+/// * `app_handle` - 应用状态句柄。
+/// * `id` - 当前服务商标识。
+/// * `config_text` - 用户编辑的 TOML。
+/// * `expected_live_config` - 编辑前读取的磁盘内容。
+///
+/// # Returns
+/// 写入成功返回空值，内容变化或写入失败时返回错误。
 #[tauri::command]
 pub async fn save_codex_live_config(
     app_handle: tauri::AppHandle,
     id: String,
     config_text: String,
+    expected_live_config: String,
 ) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
         let state = app_handle
             .try_state::<AppState>()
             .ok_or_else(|| "应用状态不可用".to_string())?;
-        ProviderService::save_codex_live_config_text(state.inner(), &id, &config_text)
-            .map_err(|e| e.to_string())
+        ProviderService::save_codex_live_config_text(
+            state.inner(),
+            &id,
+            &config_text,
+            &expected_live_config,
+        )
+        .map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| format!("保存当前配置任务执行失败: {e}"))?

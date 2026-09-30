@@ -1,7 +1,8 @@
 import type { ReactNode } from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import CodexConfigEditor from "@/components/providers/forms/CodexConfigEditor";
+import { CodexCommonConfigModal } from "@/components/providers/forms/CodexCommonConfigModal";
+import { useState } from "react";
 import GeminiConfigEditor from "@/components/providers/forms/GeminiConfigEditor";
 
 vi.mock("@/components/common/FullScreenPanel", () => ({
@@ -48,22 +49,26 @@ vi.mock("@/components/JsonEditor", () => ({
 
 describe("Common config modals", () => {
   it("keeps the Codex common config modal closed after user closes it with an error present", async () => {
-    render(
-      <CodexConfigEditor
-        authValue="{}"
-        configValue=""
-        onAuthChange={() => {}}
-        onConfigChange={() => {}}
-        useCommonConfig={false}
-        onCommonConfigToggle={() => {}}
-        commonConfigSnippet={`base_url = "https://example.com"`}
-        onCommonConfigSnippetChange={() => false}
-        onCommonConfigErrorClear={() => {}}
-        commonConfigError="Invalid TOML"
-        authError=""
-        configError=""
-      />,
-    );
+    /**
+     * 驱动独立通用配置弹窗的开关，验证错误状态下仍可关闭。
+     * @returns 测试宿主。
+     */
+    function ModalHarness() {
+      const [open, setOpen] = useState(false);
+      return (
+        <>
+          <button onClick={() => setOpen(true)}>编辑通用配置</button>
+          <CodexCommonConfigModal
+            isOpen={open}
+            onClose={() => setOpen(false)}
+            value={'base_url = "https://example.com"'}
+            onSave={() => false}
+            error="Invalid TOML"
+          />
+        </>
+      );
+    }
+    render(<ModalHarness />);
 
     expect(screen.queryByTestId("common-config-panel")).not.toBeInTheDocument();
 

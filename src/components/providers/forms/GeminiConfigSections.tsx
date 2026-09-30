@@ -15,6 +15,8 @@ interface GeminiEnvSectionProps {
 
 /**
  * GeminiEnvSection - .env editor section for Gemini environment variables
+ * @param props - 环境变量文本、通用配置状态和编辑回调。
+ * @returns 使用 INI 高亮的环境变量编辑区域。
  */
 export const GeminiEnvSection: React.FC<GeminiEnvSectionProps> = ({
   value,
@@ -101,7 +103,7 @@ GEMINI_MODEL=gemini-3.6-flash`}
         darkMode={isDarkMode}
         rows={3}
         showValidation={false}
-        language="javascript"
+        language="ini"
       />
 
       {error && (

@@ -68,6 +68,11 @@ const grokPresetEntries: Array<{
   })),
 ];
 
+/**
+ * 编辑 Grok Build 服务商信息及 TOML 配置。
+ * @param props - 初始服务商信息、提交和取消回调。
+ * @returns 服务商配置表单。
+ */
 export function GrokBuildProviderForm({
   providerId,
   submitLabel,
@@ -527,7 +532,7 @@ export function GrokBuildProviderForm({
                 darkMode={isDarkMode}
                 rows={3}
                 showValidation={false}
-                language="javascript"
+                language="toml"
               />
               {rawConfigError && (
                 <p className="text-xs text-destructive">

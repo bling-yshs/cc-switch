@@ -109,10 +109,13 @@ interface CodexConfigSectionProps {
   label?: React.ReactNode;
   /** 自定义底部提示 */
   hint?: React.ReactNode;
+  readOnly?: boolean;
 }
 
 /**
  * CodexConfigSection - Config TOML editor section
+ * @param props - TOML 草稿、快捷选项和编辑回调。
+ * @returns 服务商 TOML 配置区域。
  */
 export const CodexConfigSection: React.FC<CodexConfigSectionProps> = ({
   value,
@@ -127,6 +130,7 @@ export const CodexConfigSection: React.FC<CodexConfigSectionProps> = ({
   isProxyTakeover = false,
   label,
   hint,
+  readOnly = false,
 }) => {
   const { t } = useTranslation();
   const [isDarkMode, setIsDarkMode] = useState(false);
@@ -342,7 +346,8 @@ export const CodexConfigSection: React.FC<CodexConfigSectionProps> = ({
         darkMode={isDarkMode}
         rows={3}
         showValidation={false}
-        language="javascript"
+        language="toml"
+        readOnly={readOnly}
       />
 
       {configError && (

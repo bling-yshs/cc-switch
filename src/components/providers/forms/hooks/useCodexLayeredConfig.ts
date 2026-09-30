@@ -3,7 +3,12 @@ import { useTranslation } from "react-i18next";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { parse as parseToml } from "smol-toml";
-import { codexConfigApi, configApi, providersApi } from "@/lib/api";
+import {
+  codexConfigApi,
+  configApi,
+  providersApi,
+  settingsApi,
+} from "@/lib/api";
 import type { ProviderMeta } from "@/types";
 import { extractErrorMessage } from "@/utils/errorUtils";
 import { normalizeTomlText } from "@/utils/textNormalization";
@@ -36,8 +41,9 @@ const tomlSyntaxError = (text: string): string => {
 };
 
 /**
- * Codex 四标签页配置编辑：当前配置（真实 config.toml）、服务商配置、
- * 通用配置、最终配置。每个标签页独立保存，只保存本页内容。
+ * 管理配置层草稿、磁盘基线和应用预览，应用前检查外部变更。
+ * @param props - 服务商身份、初始配置和草稿更新方法。
+ * @returns 各配置层状态、预览结果及保存操作。
  */
 export function useCodexLayeredConfig({
   enabled,
@@ -87,18 +93,19 @@ export function useCodexLayeredConfig({
   const isCommonDirty = commonDraft !== savedCommonConfig;
 
   // ---------- 最终配置 ----------
-  const [savedFinalConfig, setSavedFinalConfig] = useState<string | null>(
-    null,
-  );
+  const [savedFinalConfig, setSavedFinalConfig] = useState<string | null>(null);
   const [finalPreview, setFinalPreview] = useState("");
   const [finalError, setFinalError] = useState("");
   const [isPreviewing, setIsPreviewing] = useState(false);
   const [finalApplyError, setFinalApplyError] = useState("");
+  const [finalSaveError, setFinalSaveError] = useState("");
+  const applyingRef = useRef(false);
   const previewSeqRef = useRef(0);
 
   // ---------- 当前配置 ----------
   const [isCurrent, setIsCurrent] = useState(false);
   const [currentProviderName, setCurrentProviderName] = useState("");
+  const [configPath, setConfigPath] = useState("config.toml");
   const [liveText, setLiveText] = useState("");
   const [liveDraft, setLiveDraft] = useState("");
   const [liveLoading, setLiveLoading] = useState(true);
@@ -161,13 +168,21 @@ export function useCodexLayeredConfig({
     void loadCommonConfig();
     void loadLiveConfig();
     void loadProviderState();
+    void settingsApi
+      .getConfigDir("codex")
+      .then((directory) => {
+        setConfigPath(`${directory.replace(/[\\/]$/, "")}/config.toml`);
+      })
+      .catch(() => {});
   }, [enabled, loadCommonConfig, loadLiveConfig, loadProviderState]);
 
   useEffect(() => {
     if (!enabled) return;
     return () => {
       if (needsInvalidateRef.current) {
-        void queryClient.invalidateQueries({ queryKey: ["providers", "codex"] });
+        void queryClient.invalidateQueries({
+          queryKey: ["providers", "codex"],
+        });
       }
     };
   }, [enabled, queryClient]);
@@ -190,7 +205,10 @@ export function useCodexLayeredConfig({
         if (seq === previewSeqRef.current) setIsPreviewing(false);
       }
     }, PREVIEW_DEBOUNCE_MS);
-    return () => clearTimeout(timer);
+    return () => {
+      clearTimeout(timer);
+      previewSeqRef.current += 1;
+    };
   }, [enabled, commonLoading, commonDraft, providerDraft]);
 
   const setCommonDraft = useCallback((value: string) => {
@@ -295,19 +313,72 @@ export function useCodexLayeredConfig({
 
   const canSaveFinal =
     canSaveTabs &&
-    !isProviderDirty &&
-    !isCommonDirty &&
+    !savingTab &&
+    !isLiveDirty &&
+    !isProxyTakeover &&
+    (!isCurrent || (!liveLoading && !liveError)) &&
+    !tomlSyntaxError(providerDraft) &&
+    !tomlSyntaxError(commonDraft) &&
     !commonLoading &&
     !commonLoadError &&
     !finalError &&
     !isPreviewing;
 
+  /**
+   * 保存当前草稿并应用已预览的合并结果，发现外部修改时刷新基线。
+   * @returns 保存流程完成的 Promise。
+   */
   const saveFinalConfig = useCallback(async () => {
-    if (!canSaveFinal || !providerId) return;
+    if (!canSaveFinal || !providerId || applyingRef.current) return;
+    applyingRef.current = true;
     setSavingTab("final");
     setFinalApplyError("");
+    setFinalSaveError("");
     try {
-      const result = await codexConfigApi.saveFinalConfig(providerId);
+      const currentId = await providersApi.getCurrent("codex");
+      if ((currentId === providerId) !== isCurrent) {
+        await Promise.all([loadProviderState(), loadLiveConfig()]);
+        setFinalSaveError(t("codexConfig.layers.providerChanged"));
+        return;
+      }
+      if (isCurrent) {
+        const latest = await codexConfigApi.readLiveConfig();
+        if (latest !== liveText) {
+          setLiveText(latest);
+          setLiveDraft(latest);
+          setFinalSaveError(t("codexConfig.layers.diskChanged"));
+          return;
+        }
+      }
+      const latestCommon =
+        (await configApi.getCommonConfigSnippet("codex")) ?? "";
+      if (latestCommon !== savedCommonConfig) {
+        setSavedCommonConfig(latestCommon);
+        if (!isCommonDirty) setCommonDraftState(latestCommon);
+        setFinalSaveError(t("codexConfig.layers.commonChanged"));
+        return;
+      }
+      const normalized = normalizeProviderConfig(providerDraft);
+      if (normalized !== providerDraft) {
+        onProviderDraftChange(normalized);
+        setFinalSaveError(t("codexConfig.layers.previewUpdated"));
+        return;
+      }
+      if (isProviderDirty) {
+        await codexConfigApi.saveProviderConfig(providerId, normalized);
+        needsInvalidateRef.current = true;
+        setSavedProviderConfig(normalized);
+      }
+      if (isCommonDirty) {
+        await configApi.setCommonConfigSnippet("codex", commonDraft);
+        needsInvalidateRef.current = true;
+        setSavedCommonConfig(commonDraft);
+      }
+      const result = await codexConfigApi.saveFinalConfig(providerId, {
+        expectedLiveConfig: isCurrent ? liveText : undefined,
+        expectedIsCurrent: isCurrent,
+        expectedFinalConfig: finalPreview,
+      });
       needsInvalidateRef.current = true;
       await loadProviderState();
       if (result.applyError) {
@@ -333,12 +404,34 @@ export function useCodexLayeredConfig({
             }),
       );
     } catch (error) {
-      setFinalApplyError(extractErrorMessage(error) || String(error));
+      setFinalSaveError(extractErrorMessage(error) || String(error));
+      await Promise.all([loadLiveConfig(), loadProviderState()]);
     } finally {
+      applyingRef.current = false;
       setSavingTab(null);
     }
-  }, [canSaveFinal, providerId, loadLiveConfig, loadProviderState, t]);
+  }, [
+    canSaveFinal,
+    providerId,
+    isCurrent,
+    liveText,
+    savedCommonConfig,
+    isCommonDirty,
+    isProviderDirty,
+    commonDraft,
+    providerDraft,
+    normalizeProviderConfig,
+    onProviderDraftChange,
+    finalPreview,
+    loadLiveConfig,
+    loadProviderState,
+    t,
+  ]);
 
+  /**
+   * 保存高级入口中的磁盘草稿，写入前核对读取基线。
+   * @returns 保存完成的 Promise。
+   */
   const saveLiveConfig = useCallback(async () => {
     if (!isLiveEditable || !providerId) return;
     const syntaxError = tomlSyntaxError(liveDraft);
@@ -349,7 +442,13 @@ export function useCodexLayeredConfig({
     setSavingTab("live");
     setLiveSaveError("");
     try {
-      await codexConfigApi.saveLiveConfig(providerId, liveDraft);
+      const latest = await codexConfigApi.readLiveConfig();
+      if (latest !== liveText) {
+        setLiveText(latest);
+        setLiveSaveError(t("codexConfig.layers.diskChangedWithDraft"));
+        return;
+      }
+      await codexConfigApi.saveLiveConfig(providerId, liveDraft, liveText);
       needsInvalidateRef.current = true;
       await Promise.all([loadLiveConfig(), loadProviderState()]);
       toast.success(
@@ -366,6 +465,7 @@ export function useCodexLayeredConfig({
     isLiveEditable,
     providerId,
     liveDraft,
+    liveText,
     loadLiveConfig,
     loadProviderState,
     t,
@@ -399,14 +499,20 @@ export function useCodexLayeredConfig({
     finalPreview,
     finalError,
     finalApplyError,
+    finalSaveError,
+    savedFinalConfig,
     isPreviewing,
     isFinalDirty:
-      savedFinalConfig !== null && !finalError && finalPreview !== savedFinalConfig,
+      savedFinalConfig !== null &&
+      !finalError &&
+      finalPreview !== savedFinalConfig,
     canSaveFinal,
     saveFinalConfig,
     // 当前配置
     isCurrent,
     currentProviderName,
+    configPath,
+    liveText,
     liveDraft,
     setLiveDraft,
     liveLoading,

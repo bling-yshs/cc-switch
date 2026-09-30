@@ -18,6 +18,8 @@ interface CodexCommonConfigModalProps {
 /**
  * CodexCommonConfigModal - Common Codex configuration editor modal
  * Allows editing of common TOML configuration shared across providers
+ * @param props - 弹窗状态、TOML 草稿和保存回调。
+ * @returns 通用配置编辑弹窗。
  */
 export const CodexCommonConfigModal: React.FC<CodexCommonConfigModalProps> = ({
   isOpen,
@@ -139,7 +141,7 @@ export const CodexCommonConfigModal: React.FC<CodexCommonConfigModalProps> = ({
           darkMode={isDarkMode}
           rows={16}
           showValidation={false}
-          language="javascript"
+          language="toml"
         />
 
         {error && (

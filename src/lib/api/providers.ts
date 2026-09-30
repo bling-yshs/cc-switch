@@ -65,16 +65,44 @@ export const codexConfigApi = {
     await invoke("save_codex_provider_config", { id, providerConfig });
   },
 
-  async saveFinalConfig(id: string): Promise<CodexFinalConfigSaveResult> {
-    return await invoke("save_codex_final_config", { id });
+  /**
+   * 按预览基线保存合并结果，拒绝期间发生的配置变化。
+   * @param id - 服务商 ID。
+   * @param expected - 磁盘、当前身份和合并结果的预期状态。
+   * @returns 保存及应用结果。
+   */
+  async saveFinalConfig(
+    id: string,
+    expected: {
+      expectedLiveConfig?: string;
+      expectedIsCurrent: boolean;
+      expectedFinalConfig: string;
+    },
+  ): Promise<CodexFinalConfigSaveResult> {
+    return await invoke("save_codex_final_config", { id, ...expected });
   },
 
   async readLiveConfig(): Promise<string> {
     return await invoke("read_codex_live_config");
   },
 
-  async saveLiveConfig(id: string, configText: string): Promise<void> {
-    await invoke("save_codex_live_config", { id, configText });
+  /**
+   * 使用读取基线直接保存磁盘文件。
+   * @param id - 当前服务商 ID。
+   * @param configText - 要写入的 TOML。
+   * @param expectedLiveConfig - 编辑前读取的文件内容。
+   * @returns 写入完成的 Promise。
+   */
+  async saveLiveConfig(
+    id: string,
+    configText: string,
+    expectedLiveConfig: string,
+  ): Promise<void> {
+    await invoke("save_codex_live_config", {
+      id,
+      configText,
+      expectedLiveConfig,
+    });
   },
 };
 

@@ -267,9 +267,22 @@ impl ProviderService {
 
     /// 保存最终配置：按已保存的服务商配置与最新共享通用配置重新合并，写入
     /// `settings_config.config` 并记录通用配置快照；当前供应商随即同步到文件。
+    ///
+    /// # Arguments
+    /// * `state` - 应用状态。
+    /// * `id` - 服务商标识。
+    /// * `expected_live_config` - 预览时读取的磁盘文件。
+    /// * `expected_is_current` - 预览时的当前服务商身份。
+    /// * `expected_final_config` - 用户已查看的合并结果。
+    ///
+    /// # Returns
+    /// 保存及应用结果；基线变化时返回错误。
     pub fn save_codex_final_config(
         state: &AppState,
         id: &str,
+        expected_live_config: Option<&str>,
+        expected_is_current: bool,
+        expected_final_config: &str,
     ) -> Result<CodexFinalConfigSaveResult, AppError> {
         Self::ensure_codex_config_layers(state)?;
 
@@ -282,6 +295,11 @@ impl ProviderService {
             .get_config_snippet(AppType::Codex.as_str())?
             .unwrap_or_default();
         let final_config = merge_codex_config_layers(&common_config, &provider_config)?;
+        if final_config != expected_final_config {
+            return Err(AppError::Message(
+                "配置层已变化，请重新查看应用预览。".to_string(),
+            ));
+        }
 
         set_settings_config_text(&mut provider.settings_config, final_config.clone());
         provider
@@ -298,6 +316,33 @@ impl ProviderService {
         )?
         .as_deref()
             == Some(id);
+
+        if is_current != expected_is_current {
+            return Err(AppError::Message(
+                "当前服务商已变化，请重新查看应用预览。".to_string(),
+            ));
+        }
+        if is_current {
+            let live_config = Self::read_codex_live_config_text()?;
+            if expected_live_config != Some(live_config.as_str()) {
+                return Err(AppError::Message(
+                    "磁盘配置已变化，请重新查看应用预览。".to_string(),
+                ));
+            }
+            let has_live_backup = futures::executor::block_on(
+                state.db.get_live_backup(AppType::Codex.as_str()),
+            )?
+            .is_some();
+            if has_live_backup
+                || state
+                    .proxy_service
+                    .detect_takeover_in_live_config_for_app(&AppType::Codex)
+            {
+                return Err(AppError::Message(
+                    "代理接管期间请先退出接管，再应用配置。".to_string(),
+                ));
+            }
+        }
 
         match Self::update_with_options(state, AppType::Codex, None, provider.clone(), false) {
             Ok(_) => Ok(CodexFinalConfigSaveResult {
@@ -341,10 +386,20 @@ impl ProviderService {
 
     /// 直接保存当前配置文件（仅当前供应商），并把文件内容回填为该供应商的最终配置；
     /// 两层配置保持不变。
+    ///
+    /// # Arguments
+    /// * `state` - 应用状态。
+    /// * `id` - 当前服务商标识。
+    /// * `config_text` - 要写入的 TOML。
+    /// * `expected_live_config` - 编辑前读取的磁盘内容。
+    ///
+    /// # Returns
+    /// 写入成功返回空值，文件变化或保存失败时返回错误。
     pub fn save_codex_live_config_text(
         state: &AppState,
         id: &str,
         config_text: &str,
+        expected_live_config: &str,
     ) -> Result<(), AppError> {
         crate::codex_config::validate_config_toml(config_text)?;
         Self::ensure_codex_config_layers(state)?;
@@ -379,6 +434,11 @@ impl ProviderService {
             }
 
             let mut provider = load_codex_provider(state, id)?;
+            if Self::read_codex_live_config_text()? != expected_live_config {
+                return Err(AppError::Message(
+                    "磁盘配置已变化，请重新读取后检查修改。".to_string(),
+                ));
+            }
             crate::codex_config::write_codex_live_config_atomic(Some(config_text))?;
 
             let live_settings = live::read_live_settings(AppType::Codex)?;
