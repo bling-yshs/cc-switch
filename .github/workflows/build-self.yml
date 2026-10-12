@@ -10,7 +10,12 @@ permissions:
 
 jobs:
   build:
+    name: Build ${{ matrix.profile }}
     runs-on: windows-2025
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [debug, release]
     steps:
       - name: Checkout
         uses: actions/checkout@v7.0.1
@@ -31,11 +36,16 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Build exe
-        run: pnpm tauri build --no-bundle
+        run: pnpm tauri build --no-bundle ${{ matrix.profile == 'debug' && '--debug' || '' }}
+
+      # archive: false 时制品以文件名命名，两个并行任务需区分文件名
+      - name: Rename exe
+        shell: pwsh
+        run: Copy-Item src-tauri/target/${{ matrix.profile }}/cc-switch.exe cc-switch-${{ matrix.profile }}.exe
 
       - name: Upload exe
         uses: actions/upload-artifact@v7.0.1
         with:
-          path: src-tauri/target/release/cc-switch.exe
+          path: cc-switch-${{ matrix.profile }}.exe
           if-no-files-found: error
           archive: false
