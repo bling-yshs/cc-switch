@@ -74,38 +74,58 @@ pub async fn update_provider(
     .map_err(|e| format!("供应商更新任务执行失败: {e}"))?
 }
 
-/// Codex 双层配置：只读合并预览
+/// 解析支持双层配置的应用（Codex / Claude）。
+fn parse_layered_app(app: &str) -> Result<AppType, String> {
+    let app_type = AppType::from_str(app).map_err(|e| e.to_string())?;
+    if matches!(app_type, AppType::Codex | AppType::Claude) {
+        Ok(app_type)
+    } else {
+        Err(format!("{app} 不支持双层配置"))
+    }
+}
+
+/// 双层配置：只读合并预览
 #[tauri::command]
-pub fn preview_codex_config(
+pub fn preview_layered_config(
+    app: String,
     common_config: String,
     provider_config: String,
 ) -> Result<String, String> {
-    ProviderService::preview_codex_config(&common_config, &provider_config)
+    let app_type = parse_layered_app(&app)?;
+    ProviderService::preview_layered_config(&app_type, &common_config, &provider_config)
         .map_err(|e| e.to_string())
 }
 
-/// Codex 双层配置：保存服务商配置层
+/// 双层配置：保存服务商配置层
 #[tauri::command]
-pub async fn save_codex_provider_config(
+pub async fn save_layered_provider_config(
     app_handle: tauri::AppHandle,
+    app: String,
     id: String,
     provider_config: String,
 ) -> Result<(), String> {
+    let app_type = parse_layered_app(&app)?;
     tauri::async_runtime::spawn_blocking(move || {
         let state = app_handle
             .try_state::<AppState>()
             .ok_or_else(|| "应用状态不可用".to_string())?;
-        ProviderService::save_codex_provider_config(state.inner(), &id, &provider_config)
-            .map_err(|e| e.to_string())
+        ProviderService::save_layered_provider_config(
+            state.inner(),
+            &app_type,
+            &id,
+            &provider_config,
+        )
+        .map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| format!("保存服务商配置任务执行失败: {e}"))?
 }
 
-/// Codex 双层配置：保存最终配置（当前供应商同步写入配置文件）
+/// 双层配置：保存最终配置（当前供应商同步写入配置文件）
 ///
 /// # Arguments
 /// * `app_handle` - 应用状态句柄。
+/// * `app` - 应用标识（codex / claude）。
 /// * `id` - 服务商标识。
 /// * `expected_live_config` - 预览时读取的磁盘内容。
 /// * `expected_is_current` - 预览时的当前服务商身份。
@@ -114,19 +134,22 @@ pub async fn save_codex_provider_config(
 /// # Returns
 /// 保存及应用结果，基线变化时返回错误。
 #[tauri::command]
-pub async fn save_codex_final_config(
+pub async fn save_layered_final_config(
     app_handle: tauri::AppHandle,
+    app: String,
     id: String,
     expected_live_config: Option<String>,
     expected_is_current: bool,
     expected_final_config: String,
-) -> Result<crate::services::provider::CodexFinalConfigSaveResult, String> {
+) -> Result<crate::services::provider::FinalConfigSaveResult, String> {
+    let app_type = parse_layered_app(&app)?;
     tauri::async_runtime::spawn_blocking(move || {
         let state = app_handle
             .try_state::<AppState>()
             .ok_or_else(|| "应用状态不可用".to_string())?;
-        ProviderService::save_codex_final_config(
+        ProviderService::save_layered_final_config(
             state.inner(),
+            &app_type,
             &id,
             expected_live_config.as_deref(),
             expected_is_current,
@@ -138,35 +161,40 @@ pub async fn save_codex_final_config(
     .map_err(|e| format!("保存最终配置任务执行失败: {e}"))?
 }
 
-/// 读取真实的 Codex config.toml
+/// 读取真实的配置文件（Codex config.toml / Claude settings.json）
 #[tauri::command]
-pub fn read_codex_live_config() -> Result<String, String> {
-    ProviderService::read_codex_live_config_text().map_err(|e| e.to_string())
+pub fn read_layered_live_config(app: String) -> Result<String, String> {
+    let app_type = parse_layered_app(&app)?;
+    ProviderService::read_layered_live_config_text(&app_type).map_err(|e| e.to_string())
 }
 
-/// 直接保存 Codex config.toml（仅当前供应商）
+/// 直接保存配置文件（仅当前供应商）
 ///
 /// # Arguments
 /// * `app_handle` - 应用状态句柄。
+/// * `app` - 应用标识（codex / claude）。
 /// * `id` - 当前服务商标识。
-/// * `config_text` - 用户编辑的 TOML。
+/// * `config_text` - 用户编辑的配置文本。
 /// * `expected_live_config` - 编辑前读取的磁盘内容。
 ///
 /// # Returns
 /// 写入成功返回空值，内容变化或写入失败时返回错误。
 #[tauri::command]
-pub async fn save_codex_live_config(
+pub async fn save_layered_live_config(
     app_handle: tauri::AppHandle,
+    app: String,
     id: String,
     config_text: String,
     expected_live_config: String,
 ) -> Result<(), String> {
+    let app_type = parse_layered_app(&app)?;
     tauri::async_runtime::spawn_blocking(move || {
         let state = app_handle
             .try_state::<AppState>()
             .ok_or_else(|| "应用状态不可用".to_string())?;
-        ProviderService::save_codex_live_config_text(
+        ProviderService::save_layered_live_config_text(
             state.inner(),
+            &app_type,
             &id,
             &config_text,
             &expected_live_config,
@@ -298,8 +326,8 @@ fn import_default_config_internal(state: &AppState, app_type: AppType) -> Result
         }
 
         ProviderService::migrate_legacy_common_config_usage_if_needed(state, app_type.clone())?;
-        if matches!(app_type, AppType::Codex) {
-            ProviderService::ensure_codex_config_layers(state)?;
+        if matches!(app_type, AppType::Codex | AppType::Claude) {
+            ProviderService::ensure_config_layers(state, &app_type)?;
         }
     }
 

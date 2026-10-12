@@ -70,6 +70,11 @@
     "emptyHint": "下の「編集内容から抽出」ボタンをクリックして、現在の設定から再利用可能な部分を抽出してください"
   },
   "claudeConfig": {
+    "layers": {
+      "providerHint": "このプロバイダー専用の設定です。キーごとに共通設定を上書きします。保存後、プレビューから設定ファイルに適用できます。",
+      "commonHint": "すべての Claude Code プロバイダーで共有します。各プロバイダーが次に設定を適用するときに反映されます。",
+      "rawDiffFallback": "JSON を解析できません。元のテキストの差分を表示します。"
+    },
     "configLabel": "Claude Code settings.json (JSON) *",
     "writeCommonConfig": "共通設定を適用",
     "editCommonConfig": "共通設定を編集",

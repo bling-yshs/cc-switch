@@ -1390,11 +1390,11 @@ pub fn run() {
             commands::get_current_provider,
             commands::add_provider,
             commands::update_provider,
-            commands::preview_codex_config,
-            commands::save_codex_provider_config,
-            commands::save_codex_final_config,
-            commands::read_codex_live_config,
-            commands::save_codex_live_config,
+            commands::preview_layered_config,
+            commands::save_layered_provider_config,
+            commands::save_layered_final_config,
+            commands::read_layered_live_config,
+            commands::save_layered_live_config,
             commands::delete_provider,
             commands::remove_provider_from_live_config,
             commands::switch_provider,
@@ -2101,9 +2101,16 @@ fn initialize_common_config_snippets(state: &store::AppState) {
         }
     }
 
-    // Codex 旧供应商固定为双层配置（幂等），须在任何修改通用配置的操作之前完成。
-    if let Err(e) = crate::services::provider::ProviderService::ensure_codex_config_layers(state) {
-        log::warn!("✗ Failed to convert Codex providers to layered config: {e}");
+    // Codex / Claude 旧供应商固定为双层配置（幂等），须在任何修改通用配置的操作之前完成。
+    for app_type in [AppType::Codex, AppType::Claude] {
+        if let Err(e) =
+            crate::services::provider::ProviderService::ensure_config_layers(state, &app_type)
+        {
+            log::warn!(
+                "✗ Failed to convert {} providers to layered config: {e}",
+                app_type.as_str()
+            );
+        }
     }
 }
 

@@ -13,7 +13,7 @@ use crate::codex_config::{get_codex_auth_path, get_codex_config_path};
 use crate::config::{delete_file, get_claude_settings_path, read_json_file, write_json_file};
 use crate::database::Database;
 use crate::error::AppError;
-use crate::provider::Provider;
+use crate::provider::{ConfigLayers, Provider};
 use crate::proxy::providers::codex_oauth_auth::{CodexLiveAuthSwitchGuard, CodexOAuthManager};
 use crate::services::mcp::McpService;
 use crate::store::AppState;
@@ -531,13 +531,120 @@ pub(crate) fn validate_codex_layer_toml(text: &str, label: &str) -> Result<(), A
     parse_codex_layer_toml(text, label).map(|_| ())
 }
 
-/// Codex 供应商是否已使用双层配置（`settings_config.config` 为最终配置）。
-pub(crate) fn codex_provider_has_config_layers(app_type: &AppType, provider: &Provider) -> bool {
-    matches!(app_type, AppType::Codex)
-        && provider
-            .meta
-            .as_ref()
-            .is_some_and(|meta| meta.codex_config_layers.is_some())
+/// 通用配置向服务商配置补齐缺失键：对象递归合并，已存在的非对象值保持服务商值
+/// （数组整体保留、类型冲突时服务商优先）。
+fn json_fill_missing(target: &mut serde_json::Map<String, Value>, source: &serde_json::Map<String, Value>) {
+    for (key, source_value) in source {
+        match target.get_mut(key) {
+            Some(Value::Object(target_map)) => {
+                if let Value::Object(source_map) = source_value {
+                    json_fill_missing(target_map, source_map);
+                }
+            }
+            Some(_) => {}
+            None => {
+                target.insert(key.clone(), source_value.clone());
+            }
+        }
+    }
+}
+
+fn parse_claude_layer_json(
+    text: &str,
+    label: &str,
+) -> Result<serde_json::Map<String, Value>, AppError> {
+    if text.trim().is_empty() {
+        return Ok(serde_json::Map::new());
+    }
+    match serde_json::from_str::<Value>(text) {
+        Ok(Value::Object(map)) => Ok(map),
+        Ok(_) => Err(AppError::Message(format!("{label} 必须是 JSON 对象"))),
+        Err(e) => Err(AppError::Message(format!("{label} JSON 格式无效: {e}"))),
+    }
+}
+
+/// 合并 Claude 双层配置：以通用配置为基础，服务商配置按键递归覆盖，
+/// 键序以服务商配置为准；结果按存储前的同一套规则规范化模型键。
+pub(crate) fn merge_claude_config_layers(
+    common_config: &str,
+    provider_config: &str,
+) -> Result<String, AppError> {
+    let common = parse_claude_layer_json(common_config, "通用配置")?;
+    let mut merged = parse_claude_layer_json(provider_config, "服务商配置")?;
+    json_fill_missing(&mut merged, &common);
+    let mut value = Value::Object(merged);
+    normalize_claude_models_in_value(&mut value);
+    serde_json::to_string_pretty(&value)
+        .map_err(|e| AppError::Message(format!("序列化 Claude 配置失败: {e}")))
+}
+
+/// 支持双层配置的应用。
+pub(crate) fn app_supports_config_layers(app_type: &AppType) -> bool {
+    matches!(app_type, AppType::Codex | AppType::Claude)
+}
+
+/// 按应用合并双层配置，返回最终配置文本。
+pub(crate) fn merge_config_layers(
+    app_type: &AppType,
+    common_config: &str,
+    provider_config: &str,
+) -> Result<String, AppError> {
+    match app_type {
+        AppType::Codex => merge_codex_config_layers(common_config, provider_config),
+        AppType::Claude => merge_claude_config_layers(common_config, provider_config),
+        _ => Err(AppError::Message(format!(
+            "{} 不支持双层配置",
+            app_type.as_str()
+        ))),
+    }
+}
+
+/// 按应用校验单层配置（空文本合法）。
+pub(crate) fn validate_config_layer(
+    app_type: &AppType,
+    text: &str,
+    label: &str,
+) -> Result<(), AppError> {
+    match app_type {
+        AppType::Codex => validate_codex_layer_toml(text, label),
+        AppType::Claude => parse_claude_layer_json(text, label).map(|_| ()),
+        _ => Err(AppError::Message(format!(
+            "{} 不支持双层配置",
+            app_type.as_str()
+        ))),
+    }
+}
+
+/// 供应商的双层配置（仅 Codex / Claude）。
+pub(crate) fn provider_config_layers<'a>(
+    app_type: &AppType,
+    provider: &'a Provider,
+) -> Option<&'a ConfigLayers> {
+    let meta = provider.meta.as_ref()?;
+    match app_type {
+        AppType::Codex => meta.codex_config_layers.as_ref(),
+        AppType::Claude => meta.claude_config_layers.as_ref(),
+        _ => None,
+    }
+}
+
+/// 写入供应商的双层配置（仅 Codex / Claude，其它应用忽略）。
+pub(crate) fn set_provider_config_layers(
+    app_type: &AppType,
+    provider: &mut Provider,
+    layers: ConfigLayers,
+) {
+    let meta = provider.meta.get_or_insert_with(Default::default);
+    match app_type {
+        AppType::Codex => meta.codex_config_layers = Some(layers),
+        AppType::Claude => meta.claude_config_layers = Some(layers),
+        _ => {}
+    }
+}
+
+/// 供应商是否已使用双层配置（存储的是最终配置）。
+pub(crate) fn provider_has_config_layers(app_type: &AppType, provider: &Provider) -> bool {
+    provider_config_layers(app_type, provider).is_some()
 }
 
 fn settings_contain_common_config(app_type: &AppType, settings: &Value, snippet: &str) -> bool {
@@ -596,8 +703,8 @@ pub(crate) fn provider_uses_common_config(
     provider: &Provider,
     snippet: Option<&str>,
 ) -> bool {
-    // 双层 Codex 供应商存的是最终配置，写入/回填时都不再叠加或剥离通用配置。
-    if codex_provider_has_config_layers(app_type, provider) {
+    // 双层供应商（Codex / Claude）存的是最终配置，写入/回填时都不再叠加或剥离通用配置。
+    if provider_has_config_layers(app_type, provider) {
         return false;
     }
     match provider
@@ -671,7 +778,7 @@ pub(crate) fn remove_common_config_from_settings(
     }
 }
 
-fn apply_common_config_to_settings(
+pub(crate) fn apply_common_config_to_settings(
     app_type: &AppType,
     settings: &Value,
     snippet: &str,
@@ -1260,7 +1367,7 @@ pub(crate) fn normalize_provider_common_config_for_storage(
     app_type: &AppType,
     provider: &mut Provider,
 ) -> Result<(), AppError> {
-    if codex_provider_has_config_layers(app_type, provider) {
+    if provider_has_config_layers(app_type, provider) {
         return Ok(());
     }
 
@@ -1757,9 +1864,11 @@ fn sync_current_provider_for_app_respecting_takeover(
 pub fn sync_current_to_live(state: &AppState) -> Result<(), AppError> {
     let mut failures = Vec::new();
 
-    // 导入/同步进来的旧格式 Codex 供应商先固定为双层配置，再按最终配置写入。
-    if let Err(error) = super::ProviderService::ensure_codex_config_layers(state) {
-        log::warn!("Codex 双层配置兼容转换失败: {error}");
+    // 导入/同步进来的旧格式 Codex / Claude 供应商先固定为双层配置，再按最终配置写入。
+    for app_type in [AppType::Codex, AppType::Claude] {
+        if let Err(error) = super::ProviderService::ensure_config_layers(state, &app_type) {
+            log::warn!("{} 双层配置兼容转换失败: {error}", app_type.as_str());
+        }
     }
 
     // Sync providers based on mode

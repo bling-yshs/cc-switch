@@ -4,6 +4,7 @@ export {
   providersApi,
   universalProvidersApi,
   codexConfigApi,
+  claudeConfigApi,
 } from "./providers";
 export { settingsApi } from "./settings";
 export { backupsApi } from "./settings";
@@ -24,6 +25,8 @@ export * as copilotApi from "./copilot";
 export type {
   ProviderSwitchEvent,
   CodexFinalConfigSaveResult,
+  LayeredConfigApi,
+  LayeredConfigAppId,
 } from "./providers";
 export type { Prompt } from "./prompts";
 export type { Profile, ProfilePayload, ProfilesResponse } from "./profiles";

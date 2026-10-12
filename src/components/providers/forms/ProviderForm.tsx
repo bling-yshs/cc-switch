@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, useCallback } from "react";
-import { useForm } from "react-hook-form";
+import { useForm, useWatch } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
@@ -74,7 +74,7 @@ import {
 import { isNonNegativeDecimalString } from "@/types/usage";
 import { getCodexCustomTemplate } from "@/config/codexTemplates";
 import CodexConfigEditor from "./CodexConfigEditor";
-import { CommonConfigEditor } from "./CommonConfigEditor";
+import ClaudeConfigEditor from "./ClaudeConfigEditor";
 import GeminiConfigEditor from "./GeminiConfigEditor";
 import JsonEditor from "@/components/JsonEditor";
 import { Label } from "@/components/ui/label";
@@ -101,8 +101,8 @@ import {
   useCodexConfigState,
   useApiKeyLink,
   useTemplateValues,
-  useCommonConfigSnippet,
   useCodexLayeredConfig,
+  useLayeredConfig,
   useSpeedTestEndpoints,
   useCodexTomlValidation,
   useGeminiConfigState,
@@ -241,6 +241,9 @@ const normalizeCodexChatReasoningForSave = (
   };
 };
 
+/** Claude 服务商配置保存前无需额外规范化 */
+const identityConfig = (config: string) => config;
+
 const normalizeProviderKey = (value: string) =>
   value.toLowerCase().replace(/[^a-z0-9-]/g, "");
 
@@ -298,13 +301,34 @@ function ProviderFormFull({
   onManageUniversalProviders,
   onManageAuthAccounts,
   onSubmittingChange,
-  initialData,
+  initialData: rawInitialData,
   showButtons = true,
   isProxyTakeover = false,
 }: ProviderFormProps) {
   if (appId === "claude-desktop") {
     throw new Error("ProviderFormFull should not receive claude-desktop");
   }
+
+  // Claude 双层配置：表单编辑的是服务商配置层，而非合并后的最终配置
+  const claudeConfigLayers =
+    appId === "claude" ? rawInitialData?.meta?.claudeConfigLayers : undefined;
+  const initialData = useMemo(() => {
+    if (!rawInitialData || !claudeConfigLayers) return rawInitialData;
+    try {
+      const parsed: unknown = claudeConfigLayers.providerConfig.trim()
+        ? JSON.parse(claudeConfigLayers.providerConfig)
+        : {};
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        return {
+          ...rawInitialData,
+          settingsConfig: parsed as Record<string, unknown>,
+        };
+      }
+    } catch {
+      // 服务商配置无法解析时回退到最终配置
+    }
+    return rawInitialData;
+  }, [rawInitialData, claudeConfigLayers]);
 
   const { t } = useTranslation();
   const isEditMode = Boolean(initialData);
@@ -441,29 +465,36 @@ function ProviderFormFull({
       name: initialData?.name ?? "",
       websiteUrl: initialData?.websiteUrl ?? "",
       notes: initialData?.notes ?? "",
-      settingsConfig: initialData?.settingsConfig
-        ? JSON.stringify(initialData.settingsConfig, null, 2)
-        : appId === "codex"
-          ? CODEX_DEFAULT_CONFIG
-          : appId === "gemini"
-            ? GEMINI_DEFAULT_CONFIG
-            : appId === "opencode"
-              ? OPENCODE_DEFAULT_CONFIG
-              : appId === "openclaw"
-                ? OPENCLAW_DEFAULT_CONFIG
-                : appId === "hermes"
-                  ? HERMES_DEFAULT_CONFIG
-                  : CLAUDE_DEFAULT_CONFIG,
+      settingsConfig: claudeConfigLayers?.providerConfig.trim()
+        ? claudeConfigLayers.providerConfig
+        : initialData?.settingsConfig
+          ? JSON.stringify(initialData.settingsConfig, null, 2)
+          : appId === "codex"
+            ? CODEX_DEFAULT_CONFIG
+            : appId === "gemini"
+              ? GEMINI_DEFAULT_CONFIG
+              : appId === "opencode"
+                ? OPENCODE_DEFAULT_CONFIG
+                : appId === "openclaw"
+                  ? OPENCLAW_DEFAULT_CONFIG
+                  : appId === "hermes"
+                    ? HERMES_DEFAULT_CONFIG
+                    : CLAUDE_DEFAULT_CONFIG,
       icon: initialData?.icon ?? "",
       iconColor: initialData?.iconColor ?? "",
     }),
-    [initialData, appId],
+    [initialData, appId, claudeConfigLayers],
   );
 
   const form = useForm<ProviderFormData>({
     resolver: zodResolver(providerSchema),
     defaultValues,
     mode: "onSubmit",
+  });
+  // Claude 服务商配置草稿需要实时驱动应用预览
+  const watchedSettingsConfig = useWatch({
+    control: form.control,
+    name: "settingsConfig",
   });
   const { isSubmitting } = form.formState;
 
@@ -835,22 +866,16 @@ function ProviderFormFull({
     onConfigChange: handleSettingsConfigChange,
   });
 
-  const {
-    useCommonConfig,
-    commonConfigSnippet,
-    commonConfigError,
-    handleCommonConfigToggle,
-    handleCommonConfigSnippetChange,
-    isExtracting: isClaudeExtracting,
-    handleExtract: handleClaudeExtract,
-  } = useCommonConfigSnippet({
-    settingsConfig: form.getValues("settingsConfig"),
-    onConfigChange: handleSettingsConfigChange,
-    initialData: appId === "claude" ? initialData : undefined,
-    initialEnabled:
-      appId === "claude" ? initialData?.meta?.commonConfigEnabled : undefined,
-    selectedPresetId: selectedPresetId ?? undefined,
+  const claudeLayered = useLayeredConfig({
+    appId: "claude",
     enabled: appId === "claude",
+    providerId,
+    isEditMode,
+    isProxyTakeover,
+    initialMeta: appId === "claude" ? initialData?.meta : undefined,
+    providerDraft: watchedSettingsConfig ?? "",
+    normalizeProviderConfig: identityConfig,
+    onProviderDraftChange: handleSettingsConfigChange,
   });
 
   // 服务商配置保存前的规范化：表单提交（新建）与“服务商配置”标签页保存共用
@@ -1127,21 +1152,20 @@ function ProviderFormFull({
     providerId,
   ]);
 
-  const [isCommonConfigModalOpen, setIsCommonConfigModalOpen] = useState(false);
-
   const shouldApplyLocalProxyRequestOverrides =
     (appId === "claude" || appId === "codex") && category !== "official";
 
   const handleSubmit = async (values: ProviderFormData) => {
-    // Codex 配置标签页各自保存；表单保存不会带走其中未保存的修改，避免静默丢失
-    if (appId === "codex") {
+    // Codex / Claude 配置标签页各自保存；表单保存不会带走其中未保存的修改，避免静默丢失
+    if (appId === "codex" || appId === "claude") {
+      const layered = appId === "codex" ? codexLayered : claudeLayered;
       const unsavedTabs = [
-        codexLayered.isLiveDirty &&
+        layered.isLiveDirty &&
           t("codexConfig.layers.liveTab", { defaultValue: "当前配置" }),
         isEditMode &&
-          codexLayered.isProviderDirty &&
+          layered.isProviderDirty &&
           t("codexConfig.layers.providerTab", { defaultValue: "服务商配置" }),
-        codexLayered.isCommonDirty &&
+        layered.isCommonDirty &&
           t("codexConfig.layers.commonTab", { defaultValue: "通用配置" }),
       ].filter(Boolean);
       if (unsavedTabs.length > 0) {
@@ -1744,11 +1768,7 @@ function ProviderFormFull({
     const nextMeta: ProviderMeta = {
       ...(baseMeta ?? {}),
       commonConfigEnabled:
-        appId === "claude"
-          ? useCommonConfig
-          : appId === "gemini"
-            ? useGeminiCommonConfigFlag
-            : undefined,
+        appId === "gemini" ? useGeminiCommonConfigFlag : undefined,
       // Codex 双层配置：编辑时后端沿用已保存的分层内容；新建时由后端补齐通用配置快照
       codexConfigLayers:
         appId === "codex"
@@ -1758,6 +1778,13 @@ function ProviderFormFull({
                 providerConfig: normalizeCodexProviderConfig(codexConfig ?? ""),
                 commonConfig: "",
               }
+          : undefined,
+      // Claude 双层配置：同上，服务商配置即表单中的配置 JSON
+      claudeConfigLayers:
+        appId === "claude"
+          ? isEditMode
+            ? baseMeta?.claudeConfigLayers
+            : { providerConfig: settingsConfig, commonConfig: "" }
           : undefined,
       endpointAutoSelect,
       claudeDesktopMode: undefined,
@@ -2787,19 +2814,10 @@ function ProviderFormFull({
             </>
           ) : (
             <>
-              <CommonConfigEditor
-                value={form.getValues("settingsConfig")}
-                onChange={(value) => form.setValue("settingsConfig", value)}
-                useCommonConfig={useCommonConfig}
-                onCommonConfigToggle={handleCommonConfigToggle}
-                commonConfigSnippet={commonConfigSnippet}
-                onCommonConfigSnippetChange={handleCommonConfigSnippetChange}
-                commonConfigError={commonConfigError}
-                onEditClick={() => setIsCommonConfigModalOpen(true)}
-                isModalOpen={isCommonConfigModalOpen}
-                onModalClose={() => setIsCommonConfigModalOpen(false)}
-                onExtract={handleClaudeExtract}
-                isExtracting={isClaudeExtracting}
+              <ClaudeConfigEditor
+                value={watchedSettingsConfig ?? ""}
+                onChange={handleSettingsConfigChange}
+                layered={claudeLayered}
               />
               {settingsConfigErrorField}
             </>

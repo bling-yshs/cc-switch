@@ -52,59 +52,87 @@ export interface CodexFinalConfigSaveResult {
   applyError?: string | null;
 }
 
-/** Codex 双层配置编辑（服务商配置 / 通用配置 / 最终配置 / 当前配置文件） */
-export const codexConfigApi = {
-  async preview(commonConfig: string, providerConfig: string): Promise<string> {
-    return await invoke("preview_codex_config", {
-      commonConfig,
-      providerConfig,
-    });
-  },
+export type LayeredConfigAppId = "codex" | "claude";
 
-  async saveProviderConfig(id: string, providerConfig: string): Promise<void> {
-    await invoke("save_codex_provider_config", { id, providerConfig });
-  },
-
-  /**
-   * 按预览基线保存合并结果，拒绝期间发生的配置变化。
-   * @param id - 服务商 ID。
-   * @param expected - 磁盘、当前身份和合并结果的预期状态。
-   * @returns 保存及应用结果。
-   */
-  async saveFinalConfig(
-    id: string,
-    expected: {
-      expectedLiveConfig?: string;
-      expectedIsCurrent: boolean;
-      expectedFinalConfig: string;
+/**
+ * 双层配置编辑（服务商配置 / 通用配置 / 最终配置 / 当前配置文件）。
+ * @param app - 应用标识（Codex 为 TOML，Claude 为 JSON）。
+ * @returns 绑定到该应用的配置接口。
+ */
+export function createLayeredConfigApi(app: LayeredConfigAppId) {
+  return {
+    async preview(
+      commonConfig: string,
+      providerConfig: string,
+    ): Promise<string> {
+      return await invoke("preview_layered_config", {
+        app,
+        commonConfig,
+        providerConfig,
+      });
     },
-  ): Promise<CodexFinalConfigSaveResult> {
-    return await invoke("save_codex_final_config", { id, ...expected });
-  },
 
-  async readLiveConfig(): Promise<string> {
-    return await invoke("read_codex_live_config");
-  },
+    async saveProviderConfig(
+      id: string,
+      providerConfig: string,
+    ): Promise<void> {
+      await invoke("save_layered_provider_config", { app, id, providerConfig });
+    },
 
-  /**
-   * 使用读取基线直接保存磁盘文件。
-   * @param id - 当前服务商 ID。
-   * @param configText - 要写入的 TOML。
-   * @param expectedLiveConfig - 编辑前读取的文件内容。
-   * @returns 写入完成的 Promise。
-   */
-  async saveLiveConfig(
-    id: string,
-    configText: string,
-    expectedLiveConfig: string,
-  ): Promise<void> {
-    await invoke("save_codex_live_config", {
-      id,
-      configText,
-      expectedLiveConfig,
-    });
-  },
-};
+    /**
+     * 按预览基线保存合并结果，拒绝期间发生的配置变化。
+     * @param id - 服务商 ID。
+     * @param expected - 磁盘、当前身份和合并结果的预期状态。
+     * @returns 保存及应用结果。
+     */
+    async saveFinalConfig(
+      id: string,
+      expected: {
+        expectedLiveConfig?: string;
+        expectedIsCurrent: boolean;
+        expectedFinalConfig: string;
+      },
+    ): Promise<CodexFinalConfigSaveResult> {
+      return await invoke("save_layered_final_config", {
+        app,
+        id,
+        ...expected,
+      });
+    },
+
+    async readLiveConfig(): Promise<string> {
+      return await invoke("read_layered_live_config", { app });
+    },
+
+    /**
+     * 使用读取基线直接保存磁盘文件。
+     * @param id - 当前服务商 ID。
+     * @param configText - 要写入的配置文本。
+     * @param expectedLiveConfig - 编辑前读取的文件内容。
+     * @returns 写入完成的 Promise。
+     */
+    async saveLiveConfig(
+      id: string,
+      configText: string,
+      expectedLiveConfig: string,
+    ): Promise<void> {
+      await invoke("save_layered_live_config", {
+        app,
+        id,
+        configText,
+        expectedLiveConfig,
+      });
+    },
+  };
+}
+
+export type LayeredConfigApi = ReturnType<typeof createLayeredConfigApi>;
+
+/** Codex 双层配置编辑（TOML） */
+export const codexConfigApi = createLayeredConfigApi("codex");
+
+/** Claude 双层配置编辑（JSON） */
+export const claudeConfigApi = createLayeredConfigApi("claude");
 
 export const providersApi = {
   async getAll(appId: AppId): Promise<Record<string, Provider>> {

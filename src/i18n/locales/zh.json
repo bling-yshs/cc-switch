@@ -70,6 +70,11 @@
     "emptyHint": "点击下方「从编辑内容提取」按钮，从当前配置中提取可复用的部分"
   },
   "claudeConfig": {
+    "layers": {
+      "providerHint": "该服务商独有的配置，按键覆盖通用配置。保存后可在应用预览中写入配置文件。",
+      "commonHint": "所有 Claude Code 服务商共享。保存后，各服务商在下一次应用配置时采用。",
+      "rawDiffFallback": "JSON 无法解析，当前展示原始文本差异。"
+    },
     "configLabel": "Claude Code 配置 (JSON) *",
     "writeCommonConfig": "应用通用配置",
     "editCommonConfig": "编辑通用配置",

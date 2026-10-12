@@ -70,6 +70,11 @@
     "emptyHint": "點擊下方「從編輯內容擷取」按鈕，從目前設定中擷取可重複使用的部分"
   },
   "claudeConfig": {
+    "layers": {
+      "providerHint": "該服務商專用的設定，按鍵覆蓋通用設定。儲存後可在套用預覽中寫入設定檔。",
+      "commonHint": "所有 Claude Code 服務商共用。儲存後，各服務商在下次套用設定時採用。",
+      "rawDiffFallback": "JSON 無法解析，目前顯示原始文字差異。"
+    },
     "configLabel": "Claude Code 設定 (JSON) *",
     "writeCommonConfig": "套用通用設定",
     "editCommonConfig": "編輯通用設定",

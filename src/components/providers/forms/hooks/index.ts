@@ -12,6 +12,8 @@ export type {
   CodexConfigTab,
   CodexLayeredConfigState,
 } from "./useCodexLayeredConfig";
+export { useLayeredConfig } from "./useLayeredConfig";
+export type { LayeredConfigState, LayeredConfigTab } from "./useLayeredConfig";
 export { useSpeedTestEndpoints } from "./useSpeedTestEndpoints";
 export { useCodexTomlValidation } from "./useCodexTomlValidation";
 export { useGeminiConfigState } from "./useGeminiConfigState";

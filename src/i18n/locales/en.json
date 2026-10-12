@@ -70,6 +70,11 @@
     "emptyHint": "Click \"Extract from Editor\" below to extract reusable parts from your current configuration"
   },
   "claudeConfig": {
+    "layers": {
+      "providerHint": "Settings specific to this provider override common settings by key. Save them, then apply them from the preview.",
+      "commonHint": "Shared by all Claude Code providers. Each provider adopts saved changes the next time its configuration is applied.",
+      "rawDiffFallback": "JSON could not be parsed. Showing raw text differences."
+    },
     "configLabel": "Claude Code settings.json (JSON) *",
     "writeCommonConfig": "Apply Common Config",
     "editCommonConfig": "Edit Common Config",

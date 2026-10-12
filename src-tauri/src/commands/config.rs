@@ -345,17 +345,17 @@ pub async fn set_common_config_snippet(
 
     validate_common_config_snippet(&app_type, &snippet)?;
 
-    // Codex：修改共享通用配置前先把旧供应商固定为双层配置；
+    // Codex / Claude：修改共享通用配置前先把旧供应商固定为双层配置；
     // 之后通用配置只在各服务商保存“最终配置”时生效，这里不写 live。
-    let is_codex = app_type == "codex";
-    if is_codex {
-        crate::services::provider::ProviderService::ensure_codex_config_layers(state.inner())
+    if matches!(app_type.as_str(), "codex" | "claude") {
+        let app = AppType::from_str(&app_type).map_err(|e| e.to_string())?;
+        crate::services::provider::ProviderService::ensure_config_layers(state.inner(), &app)
             .map_err(|e| e.to_string())?;
     }
 
     let value = if is_cleared { None } else { Some(snippet) };
 
-    if matches!(app_type.as_str(), "claude" | "gemini") {
+    if app_type == "gemini" {
         if let Some(legacy_snippet) = old_snippet
             .as_deref()
             .filter(|value| !value.trim().is_empty())
@@ -379,7 +379,7 @@ pub async fn set_common_config_snippet(
         .set_config_snippet_cleared(&app_type, is_cleared)
         .map_err(|e| e.to_string())?;
 
-    if matches!(app_type.as_str(), "claude" | "gemini") {
+    if app_type == "gemini" {
         let app = AppType::from_str(&app_type).map_err(|e| e.to_string())?;
         crate::services::provider::ProviderService::sync_current_provider_for_app(
             state.inner(),
